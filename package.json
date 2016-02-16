@@ -2,7 +2,7 @@
   "author": "David Oliveira <d.oliveira@prozone.org>",
   "name": "multidownloader",
   "description": "A command-line downloading app which can handle multiple downloads at the same time",
-  "version": "0.0.1",
+  "version": "0.0.2",
   "repository": {
     "type": "git",
     "url": "https://github.com/davidfoliveira/node-multidownloader/"

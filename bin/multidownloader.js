@@ -158,7 +158,6 @@ mapParallel(OPTS.urls,
 	function(err,res){
 		if ( OPTS.verbose ) process.stdout.write("\n");
 		process.stderr.write("Successfully downloaded "+dlCount+" files\n");
-		console.log("res: ",res);
 		return process.exit(0);
 	}
 );
