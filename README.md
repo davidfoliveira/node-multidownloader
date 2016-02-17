@@ -8,7 +8,12 @@ npm install -g multidownloader
 
 ## Using
 
-multidownloader http://url1/file1 http://url2/file2 ...
+	multidownloader [OPTIONS] http://url1/file1 http://url2/file2 ...
+
+or
+
+	multidownloader [OPTIONS] - ...
+
 
 ## Supported parameters
 
@@ -18,4 +23,10 @@ multidownloader http://url1/file1 http://url2/file2 ...
 
 * -v - Activates the verbose mode
 
+* -q - Quiet mode
 
+* -p X - Periodically print the percentage of completed downloads (every X seconds)
+
+* -r X - Retry X times downloading a file when it fails (low-level failures not HTTP >= 400)
+
+* -R X - Wait X ms before a retry

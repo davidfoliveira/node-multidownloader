@@ -4,8 +4,10 @@
 
 var
 	fs		= require('fs'),
-	fileIdx = 0,
-	dlCount	= 0,
+	fileIdx		= 0,
+	dlCount		= 0,
+	dlSucCount	= 0,
+	dlFailCount	= 0,
 	OPTS;
 
 
@@ -16,7 +18,11 @@ function getOpts() {
 	var
 		opts = {
 			simSockets: 5,
+			simDownloads: 10,
 			destination: ".",
+			downloadPercentage: null,
+			retries: 3,
+			retryWait: 100,
 			urls: []
 		},
 		nextOpt,
@@ -26,8 +32,12 @@ function getOpts() {
 	for ( var x = 2 ; x < process.argv.length ; x++ ) {
 		if ( process.argv[x].match(/^\-([\w-]+)/) ) {
 			var par = RegExp.$1;
-			if ( par == "s" ) {
+			if ( par == "S" ) {
 				nextOpt = "simSockets";
+				nextOptFormat = "number";
+			}
+			if ( par == "s" ) {
+				nextOpt = "simDownloads";
 				nextOptFormat = "number";
 			}
 			else if ( par == "d" || par == "-target" || par == "-destination" ) {
@@ -37,6 +47,22 @@ function getOpts() {
 			else if ( par == "v" ) {
 				opts.verbose = true;
 				nextOpt = null;
+			}
+			else if ( par == "q" ) {
+				opts.quiet = true;
+				nextOpt = null;
+			}
+			else if ( par == "p" ) {
+				nextOpt = "downloadPercentage";
+				nextOptFormat = "number";
+			}
+			else if ( par == "r" ) {
+				nextOpt = "retries";
+				nextOptFormat = "number";
+			}
+			else if ( par == "R" ) {
+				nextOpt = "retryIn";
+				nextOptFormat = "number";
 			}
 		}
 		else if ( nextOpt ) {
@@ -54,16 +80,22 @@ function getOpts() {
 }
 
 // Download a file to a target directory
-function download(url,targetFile,callback) {
+function download(url,targetFile,opts,callback) {
 
 	var
 		u	=	require('url').parse(url),
-		mod =	(u.proto == 'https') ? require('https') :
+		mod	=	(u.proto == 'https') ? require('https') :
 				require('http'),
 		req,
 		stream,
 		pi;
 
+	// Mark the number of attempts
+	if ( !opts._attempt )
+		opts._attempt = 0;
+	opts._attempt++;
+
+	// Get it
 	req = mod.get(u,function(res){
 		if ( res.statusCode >= 400 ) {
 			process.stderr.write("Got status "+res.statusCode+" on '"+url+"'.\n");
@@ -84,31 +116,57 @@ function download(url,targetFile,callback) {
 		});
 	});
 	req.on('error',function(err){
-		process.stderr.write("Error downloading '"+url+"': "+err.toString()+"\n");
+		process.stderr.write("Error downloading '"+url+"': "+err.toString()+" (attempt "+opts._attempt+")\n");
+		// Retry ?
+		if ( opts.retries ) {
+			var newOpts = clone(opts);
+			newOpts.retries--;
+			return setTimeout(function(){
+				download(url,targetFile,newOpts,callback);
+			},opts.retryWait || 100);
+		}
 		return callback(err,null);
 	});
 
 }
 
-function mapParallel(arr,fn,callback) {
+function clone(obj) {
+
+	var _new = {};
+	for ( var p in obj )
+		_new[p] = obj[p];
+	return _new;
+
+}
+
+function mapParallelLimit(arr,limit,fn,callback) {
 
 	var
+		items = arr.slice(0),
 		res = [],
 		idx = -1,
-		got = 0;
+		got = 0,
+		next = function(){
+			if ( items.length == 0 )
+				return;
 
-	return arr.forEach(function(item){
-		(function(idx){
-			fn(item,function(err,rv){
-				if ( err )
-					return callback(err,null);
-				res[idx] = rv;
-				got++;
-				if ( got == arr.length )
-					return callback(null,res);
-			});
-		})(++idx);
-	});
+			var item = items.shift();
+			(function(idx){
+				fn(item,function(err,rv){
+					next();
+					if ( err )
+						return callback(err,null);
+					res[idx] = rv;
+					got++;
+					if ( got == arr.length )
+						return callback(null,res);
+				});
+			})(++idx);		
+		};
+
+	for ( var x = 0 ; x < limit ; x++ ) {
+		next();
+	}
 
 }
 
@@ -128,12 +186,16 @@ function fileFromURL(url) {
 
 // Starts here
 OPTS = getOpts();
-//console.log(OPTS);
 
 // Validate command-line options
 if ( OPTS.urls.length == 0 || !OPTS.simSockets ) {
 	process.stderr.write("Syntax error: multidownloader.js [-s X] url1 url2 ...\n");
 	process.exit(-1);
+}
+
+// If the first URL is a -, read the URL's from STDIN
+if ( OPTS.urls[0] == "-" ) {
+	OPTS.urls = fs.readFileSync("/dev/stdin").toString().split(/\r?\n/);
 }
 
 // Get globalAgent max sockets
@@ -143,21 +205,43 @@ require('https').globalAgent.maxSockets = OPTS.simSockets;
 
 // Download
 dlCount = 0;
-mapParallel(OPTS.urls,
+mapParallelLimit(OPTS.urls,OPTS.simDownloads,
 	function(u,cb){
-		return download(u,OPTS.destination+"/"+fileFromURL(u),function(err,status){
+		return download(u,OPTS.destination+"/"+fileFromURL(u),{retries: OPTS.retries, retryWait: OPTS.retryWait},function(err,status){
+			dlCount++;
 			if ( !err ) {
+				dlSucCount++;
 				if ( OPTS.verbose ) process.stdout.write(".");
-				dlCount++;
 			}
-			else
+			else {
+				dlFailCount++;
 				if ( OPTS.verbose ) process.stdout.write("!");
+			}
 			cb(null,status);
 		});
 	},
 	function(err,res){
 		if ( OPTS.verbose ) process.stdout.write("\n");
-		process.stderr.write("Successfully downloaded "+dlCount+" files\n");
-		return process.exit(0);
+		if ( !OPTS.quiet ) {
+			process.stdout.write("Successfull downloads: "+dlSucCount+"\n");
+			if ( dlFailCount )
+				process.stdout.write("Failed downloads: "+dlFailCount+"\n");
+		}
+		if ( dlFailCount == 0 )
+			return process.exit(0);
+		else if ( dlFailCount > 0 && dlFailCount == OPTS.urls.length )
+			return process.exit(2);
+		else if ( dlFailCount > 0 && dlFailCount < OPTS.urls.length )
+			return process.exit(1);
 	}
 );
+
+// Periodically print download percentage
+if ( OPTS.downloadPercentage ) {
+	var dpint = setInterval(function(){
+		var pct = ((dlCount * 100) / OPTS.urls.length).toFixed(2);
+		if ( pct == 100 )
+			clearTimeout(dpint);
+		process.stdout.write(pct+" % ("+dlCount+"/"+OPTS.urls.length+")\n");
+	},OPTS.downloadPercentage*1000);
+}
